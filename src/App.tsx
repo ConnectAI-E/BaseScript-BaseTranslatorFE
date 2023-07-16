@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { up, recordValueCache, urlUploadId, downloadErr, successSet, clearCache } from './utils'
+import { translate } from './utils'
 import { Form, Button, Toast, Banner, Spin, Tooltip } from '@douyinfe/semi-ui'
-import { IFieldMeta as FieldMeta, IWidgetTable, FieldType, IOpenSegmentType, TableMeta, bitable } from '@base-open/web-api'
+import { IFieldMeta as FieldMeta, IWidgetTable, FieldType, IOpenSegmentType, TableMeta, bitable, IOpenSegment } from '@base-open/web-api'
 import './App.css'
 import { icons } from './icons'
 import { useTranslation } from 'react-i18next';
+import { supportedLanguage } from './config';
 
 
 //@ts-ignore
@@ -31,23 +32,6 @@ let _forceUpdate: any;
 export function forceUpdateCom() {
   return _forceUpdate({});
 }
-
-const END = "end";
-
-const taskIterator = {
-  /** 该数组的元素将直接塞给up函数 */
-  allTasks: [],
-  step: 1, // 由于uploadFile没有销毁注册过的监听事件，这里只能为1,每次上传1个文件，为每次上传文件进行监听,1次上传并设置一个单元格，好了再设置下一个
-  *[Symbol.iterator]() {
-    for (let index = 0; index < this.allTasks.length; index += this.step) {
-      let task: any = this.allTasks.slice(index, index + this.step);
-      task = Promise.allSettled(task.map((t: any) => up(t)));
-      yield { task, range: index + "-" + (index + this.step) };
-    }
-    yield END;
-  },
-  allUrl: new Set(),
-};
 
 /** 表格，字段变化的时候刷新插件 */
 export default function Ap() {
@@ -97,10 +81,10 @@ export default function Ap() {
     }
   }, [tableList]);
 
-  return <UrlToFile key={key}></UrlToFile>;
+  return <Translate key={key}></Translate>;
 }
 
-function UrlToFile() {
+function Translate() {
   const { t } = useTranslation();
   const [btnDisabled, setBtnDisabled] = useState(true);
   const [tableMetaList, setTableMetaList] = useState<TableMeta[]>();
@@ -111,9 +95,9 @@ function UrlToFile() {
   _forceUpdate = f;
   const [table, setTable] = useState<IWidgetTable>();
   const filedInfo = useRef<{
-    url: FieldMeta[];
-    file: FieldMeta[];
-  }>({ url: [], file: [] });
+    text: FieldMeta[];
+    select: FieldMeta[];
+  }>({ text: [], select: [] });
 
   useEffect(() => {
     setTableLoading(true)
@@ -131,42 +115,38 @@ function UrlToFile() {
     })
   }, []);
 
-  const init = () => {
-    clearCache();
-    taskIterator.allUrl.clear();
-    taskIterator.allTasks = [];
-  }
-
   useEffect(() => {
     if (!tableId) {
       return;
     }
     setLoading(true);
-    init();
-    formApi.current.setValue("url", "");
-    formApi.current.setValue("file", "");
+    formApi.current.setValue("targetField", "");
+    formApi.current.setValue("sourceField", "");
+    formApi.current.setValue("targetLang", "");
     bitable.base.getTableById(tableId).then((table) => {
       setTable(table);
-      const urlArr: FieldMeta[] = [];
-      const fileArr: FieldMeta[] = [];
+      const textArr: FieldMeta[] = [];
+      const selectArr: FieldMeta[] = [];
       table.getFieldMetaList().then((m) => {
         Promise.allSettled(
           m.map(async (meta) => {
             switch (meta.type) {
               case FieldType.Text:
-              case FieldType.Url:
-                urlArr.push(meta);
+                textArr.push(meta);
+                break;
+              case FieldType.SingleSelect:
+              case FieldType.MultiSelect:
+                selectArr.push(meta);
                 break;
               case FieldType.Lookup:
               case FieldType.Formula:
                 const field = await table.getFieldById(meta.id);
                 const proxyType = await field.getProxyType();
-                if (proxyType === FieldType.Text || proxyType === FieldType.Url) {
-                  urlArr.push(meta);
+                if (proxyType === FieldType.Text) {
+                  textArr.push(meta);
+                } else if (proxyType === FieldType.SingleSelect || proxyType === FieldType.MultiSelect) {
+                  selectArr.push(meta);
                 }
-                break;
-              case FieldType.Attachment:
-                fileArr.push(meta);
                 break;
               default:
                 break;
@@ -174,10 +154,8 @@ function UrlToFile() {
             return true;
           })
         ).finally(() => {
-          filedInfo.current.url = urlArr;
-
-          filedInfo.current.file = fileArr;
-
+          filedInfo.current.text = textArr;
+          filedInfo.current.select = selectArr;
           setLoading(false)
           forceUpdateCom();
         });
@@ -186,13 +164,17 @@ function UrlToFile() {
   }, [tableId]);
 
   const onClickStart = async () => {
-    const { url: urlFieldId, file: fileFieldId } = formApi.current.getValues();
-    if (!fileFieldId) {
-      Toast.error(t('choose.attachment'));
+    const { sourceField: sourceFieldId, targetField: targetFieldId, targetLang: targetLang } = formApi.current.getValues();
+    if (!sourceFieldId) {
+      Toast.error(t('choose.sourceField'));
       return;
     }
-    if (!urlFieldId) {
-      Toast.error(t("err.url"));
+    if (!targetFieldId) {
+      Toast.error(t("choose.targetField"));
+      return;
+    }
+    if (!targetLang) {
+      Toast.error(t("choose.targetLang"));
       return;
     }
     if (!tableId) {
@@ -200,113 +182,68 @@ function UrlToFile() {
       return;
     }
     setLoading(true);
-    init();
     const table = await bitable.base.getTableById(tableId);
-    const urlField = await table.getFieldById(urlFieldId);
-    const urlValueList = await urlField.getFieldValueList();
-    const allTasks: any = [];
-    // 遍历url的字段，找出这些字段中的url,然后在recordValueCache记录它对应的附件字段单元格所需要的附件个数
-    // 在urlUploadId统计每个url将被哪些附件单元格所需要，以避免重复下载url，上传文件
-    // taskIterator记录每个url，单元格，创建转换任务的信息
-    urlValueList.forEach(({ record_id, value }, index) => {
-      const tableIdRecordId = `${table.id}_${record_id}_${fileFieldId}`;
+    const sourceField = await table.getFieldById(sourceFieldId);
+    const sourceValueList = await sourceField.getFieldValueList();
+    const toTranslateList: any = [];
+    sourceValueList.forEach(({ record_id, value }, index) => {
       if (Array.isArray(value)) {
-        value.forEach(({ type, link }: any) => {
-          if (type === IOpenSegmentType.Url) {
-            if (!recordValueCache[tableIdRecordId]) {
-              recordValueCache[tableIdRecordId] = {
-                shouldLoadFile: 1,
-                uploadStatus: [],
-              };
-            } else {
-              recordValueCache[tableIdRecordId].shouldLoadFile += 1;
-            }
-            if (!urlUploadId[link]) {
-              urlUploadId[link] = {
-                tableRecord: new Set([tableIdRecordId]),
-              };
-            } else {
-              urlUploadId[link].tableRecord.add(tableIdRecordId);
-            }
-
-            allTasks.push({
-              url: link,
-              table,
-              index,
-              recordId: record_id,
-              fieldId: fileFieldId,
-              filename: link.split("/").slice(-1)[0].split("?")[0],
-            });
-            taskIterator.allUrl.add(link);
-          }
+        toTranslateList.push({
+          record_id: record_id,
+          text: value.map(({ type, text }: any) => text).join("")
         });
       }
     });
-    taskIterator.allTasks = allTasks as any;
-    _forceUpdate();
-    // 开始转换任务
-    for (const iterator of taskIterator) {
-      if (iterator === END) {
-        if (iterator === END) {
-          setTimeout(() => {
-            // 等浏览器处理完成
-            setLoading(false);
-          }, 100);
-          setTimeout(() => {
-            if (Object.keys(downloadErr).length) {
-              Toast.error(t('some.err', { num: Object.keys(downloadErr).length }));
-            } else {
-              Toast.success(t('success'));
-            }
-          }, 500);
-        }
-      } else {
-        await iterator.task;
-      }
+    const translateResult = await translate(toTranslateList, targetLang);
+    if (Array.isArray(translateResult)) {
+      await translateResult.forEach(({ record_id, text }: any) =>
+        table.setCellValue(targetFieldId, record_id, [{ type: IOpenSegmentType.Text, text: text }])
+      );
     }
+    setLoading(false);
+    Toast.success(t('success'));
   };
 
   const onFormChange = (e: any) => {
-    const { table, url, file } = e.values;
-    if (!table || !url || !file) {
+    const { sourceField, targetField, targetLang } = e.values;
+    if (!sourceField || !targetField || !targetLang) {
       setBtnDisabled(true);
     } else {
       setBtnDisabled(false);
     }
   };
 
-
   return (
     <div>
-      {/* 请设置url字段和保存附件的字段，即可批量处理 */}
       <Spin spinning={loading || tableLoading}>
-        <Form
-          onChange={onFormChange}
-          disabled={loading}
-          getFormApi={(e) => {
-            formApi.current = e;
-          }}
-        >
-          <Form.Select
-            style={{ width: "100%" }}
-            onChange={(tableId) => setTableId(tableId as string)}
-            field="table"
-            label={t('choose.table')}
-          >
-            {Array.isArray(tableMetaList) &&
+        <Form onChange={onFormChange} disabled={loading} getFormApi={(e) => { formApi.current = e; }}>
+          <Form.Select onChange={(tableId) => setTableId(tableId as string)} field="table" label={t('choose.table')}>
+            {
+              Array.isArray(tableMetaList) &&
               tableMetaList.map(({ id, name }) => (
                 <Form.Select.Option key={id} value={id}>
                   <div className="semi-select-option-text">{name}</div>
                 </Form.Select.Option>
-              ))}
+              ))
+            }
           </Form.Select>
-          <Form.Select
-            style={{ width: "100%" }}
-            field="url"
-            label={t('choose.url')}
-            placeholder={t('choose')}
-          >
-            {filedInfo.current.url.map((m) => {
+          <Form.Select field="sourceField" label={t('choose.sourceField')} placeholder={t('choose')}>
+            {
+              filedInfo.current.text.map((m) => {
+                return (
+                  <Form.Select.Option value={m.id} key={m.id}>
+                    <div className="semi-select-option-text">
+                      {/* @ts-ignore */}
+                      {icons[m.type]}
+                      {m.name}
+                    </div>
+                  </Form.Select.Option>
+                );
+              })
+            }
+          </Form.Select>
+          <Form.Select field="targetField" label={t('choose.targetField')} placeholder={t('choose')}>
+            {filedInfo.current.text.map((m) => {
               return (
                 <Form.Select.Option value={m.id} key={m.id}>
                   <div className="semi-select-option-text">
@@ -318,75 +255,23 @@ function UrlToFile() {
               );
             })}
           </Form.Select>
-          {filedInfo.current.file.length > 0 ? (
-            <Form.Select
-              style={{ width: "100%" }}
-              field="file"
-              label={t('to.attachment')}
-              placeholder={t('choose')}
-            >
-              {filedInfo.current.file.map((m) => {
-                return (
-                  <Form.Select.Option value={m.id} key={m.id}>
-                    <div className="semi-select-option-text">
-                      {/* @ts-ignore */}
-                      {icons[m.type]}
-                      {m.name}
-                    </div>
-                  </Form.Select.Option>
-                );
-              })}
-            </Form.Select>
-          ) : (
-            tableId && (
-              <div>
-                <Button
-                  onClick={() => {
-                    //@ts-ignore
-                    table?.addField?.({
-                      type: FieldType.Attachment,
-                    });
-                  }}
-                >
-                  {t('add.field')}
-                </Button>
-              </div>
-            )
-          )}
-          <Form.CheckboxGroup
-            onChange={(e) => {
-              moreConfig = Object.fromEntries(e.map((k) => [k, true]));
-              forceUpdateCom();
-            }}
-            field="others"
-            label=" "
-          >
-            <Form.Checkbox value="cover">{t('with.field')}</Form.Checkbox>
-          </Form.CheckboxGroup>
-
+          <Form.Select field="targetLang" label={t('choose.targetLang')} placeholder={t('choose')}>
+            {supportedLanguage.map((m) => {
+              return (
+                <Form.Select.Option value={m.code} key={m.code}>
+                  <div className="semi-select-option-text">
+                    {t(m.key)}
+                  </div>
+                </Form.Select.Option>
+              );
+            })}
+          </Form.Select>
         </Form>
       </Spin> <br></br>
-      <Button
-        disabled={btnDisabled}
-        type="primary"
-        className="bt1"
-        loading={loading}
-        onClick={onClickStart}
-      >
+      <Button disabled={btnDisabled} type="primary" className="bt1" loading={loading} onClick={onClickStart}>
         {t('start.btn')}
       </Button>
-      {/* 
-            目前还不支持列出record所在的索引，后续支持的时候将会列出失败url以及它所在的行
-            <div>
-                <p>下载失败的url:</p>
-                <div style={{ maxWidth: '90vw', overflow: 'auto' }} >
-                    {Object.keys(downloadErr).map((k) => [<Tooltip content={<div>
-                        {String(downloadErr[k].reason)}
-                    </div>}><a href={k}>{k}</a></Tooltip>, <br></br>, <br />])}
-                </div>
-            </div> 
-            */}
-      {loading && taskIterator.allUrl.size > 0 && (
+      {loading && (
         <div
           style={{
             display: "flex",
@@ -409,7 +294,6 @@ function UrlToFile() {
                   <Spin />
                 </div>
                 <div>
-                  {t('trans.num', { num: `${successSet.size}/${taskIterator.allUrl.size}` })}
                 </div>
               </div>
             </Banner>
@@ -419,13 +303,3 @@ function UrlToFile() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-

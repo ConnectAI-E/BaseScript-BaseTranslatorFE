@@ -1,0 +1,17 @@
+export const supportedLanguage = [
+    { code: "zh-TW", key: "lang.zh-TW" },
+    { code: "zh", key: "lang.zh" },
+    { code: "en", key: "lang.en" },
+    { code: "ja", key: "lang.ja" },
+    { code: "ru", key: "lang.ru" },
+    { code: "de", key: "lang.de" },
+    { code: "it", key: "lang.it" },
+    { code: "pl", key: "lang.pl" },
+    { code: "th", key: "lang.th" },
+    { code: "hi", key: "lang.hi" },
+    { code: "id", key: "lang.id" },
+    { code: "es", key: "lang.es" },
+    { code: "pt", key: "lang.pt" },
+    { code: "ko", key: "lang.ko" },
+    { code: "vi", key: "lang.vi" },
+];
