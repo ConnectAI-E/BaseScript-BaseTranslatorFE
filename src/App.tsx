@@ -271,35 +271,6 @@ function Translate() {
       <Button disabled={btnDisabled} type="primary" className="bt1" loading={loading} onClick={onClickStart}>
         {t('start.btn')}
       </Button>
-      {loading && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            width: "100%",
-            position: "fixed",
-            top: "30px",
-          }}
-        >
-          <div style={{ width: "280px" }}>
-            <Banner
-              style={{ flexGrow: 2 }}
-              closeIcon={null}
-              icon={null}
-              fullMode={false}
-              bordered
-            >
-              <div style={{ display: "flex", gap: "20px", justifyContent: "center" }}>
-                <div style={{ marginLeft: 10 }}>
-                  <Spin />
-                </div>
-                <div>
-                </div>
-              </div>
-            </Banner>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
