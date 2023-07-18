@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { translate } from './utils'
+import { translate } from './api'
 import { Form, Button, Toast, Banner, Spin, Tooltip } from '@douyinfe/semi-ui'
 import { IFieldMeta as FieldMeta, IWidgetTable, FieldType, IOpenSegmentType, TableMeta, bitable, IOpenSegment } from '@base-open/web-api'
 import './App.css'
